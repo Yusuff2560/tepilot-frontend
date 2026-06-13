@@ -5,11 +5,13 @@ export default function Home() {
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: "Merhaba! Ben TePilot. Sana web'de gezinmem, sayfa analiz etmem veya herhangi bir konuda yardım etmem için komut ver.",
+      content: "Merhaba! Ben TePilot. Bir web sitesini gezeyim, araştırma yapayım veya yardımcı olayım.",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [screenshots, setScreenshots] = useState([]);
+  const [activeScreenshot, setActiveScreenshot] = useState(null);
   const bottomRef = useRef(null);
 
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
@@ -35,6 +37,12 @@ export default function Home() {
       });
 
       const data = await res.json();
+
+      if (data.screenshots && data.screenshots.length > 0) {
+        setScreenshots(data.screenshots);
+        setActiveScreenshot(data.screenshots[data.screenshots.length - 1]);
+      }
+
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.response || data.error },
@@ -42,7 +50,7 @@ export default function Home() {
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "❌ Backend'e bağlanılamadı. Render servisini kontrol et." },
+        { role: "assistant", content: "❌ Backend'e bağlanılamadı." },
       ]);
     } finally {
       setLoading(false);
@@ -69,45 +77,89 @@ export default function Home() {
         </span>
       </header>
 
-      <div className="chat-container">
-        {messages.map((msg, i) => (
-          <div key={i} className={`message ${msg.role}`}>
-            <div className="bubble">
-              <pre>{msg.content}</pre>
-            </div>
+      <div className="main-content">
+        {/* Chat Panel */}
+        <div className="chat-panel">
+          <div className="chat-container">
+            {messages.map((msg, i) => (
+              <div key={i} className={`message ${msg.role}`}>
+                <div className="bubble">
+                  <pre>{msg.content}</pre>
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="message assistant">
+                <div className="bubble typing">
+                  <span /><span /><span />
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
           </div>
-        ))}
-        {loading && (
-          <div className="message assistant">
-            <div className="bubble typing">
-              <span /><span /><span />
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
 
-      <div className="input-area">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKey}
-          placeholder="Komut ver... (Enter ile gönder)"
-          rows={1}
-          disabled={loading}
-        />
-        <button onClick={sendMessage} disabled={loading || !input.trim()}>
-          {loading ? "..." : "↑"}
-        </button>
+          <div className="input-area">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder="Komut ver... (Enter ile gönder)"
+              rows={1}
+              disabled={loading}
+            />
+            <button onClick={sendMessage} disabled={loading || !input.trim()}>
+              {loading ? "..." : "↑"}
+            </button>
+          </div>
+        </div>
+
+        {/* Browser Panel */}
+        <div className="browser-panel">
+          <div className="browser-header">
+            <span className="browser-title">🌐 Tarayıcı</span>
+            {screenshots.length > 0 && (
+              <span className="screenshot-count">{screenshots.length} ekran</span>
+            )}
+          </div>
+
+          <div className="browser-screen">
+            {activeScreenshot ? (
+              <img
+                src={`data:image/jpeg;base64,${activeScreenshot}`}
+                alt="Browser screenshot"
+                className="screenshot-img"
+              />
+            ) : (
+              <div className="browser-empty">
+                <span>🤖</span>
+                <p>TePilot bir web sitesine gittiğinde<br />ekran burada görünecek</p>
+              </div>
+            )}
+          </div>
+
+          {screenshots.length > 1 && (
+            <div className="screenshot-strip">
+              {screenshots.map((s, i) => (
+                <img
+                  key={i}
+                  src={`data:image/jpeg;base64,${s}`}
+                  alt={`Screenshot ${i + 1}`}
+                  className={`strip-thumb ${s === activeScreenshot ? "active" : ""}`}
+                  onClick={() => setActiveScreenshot(s)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <style jsx global>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        
+
         body {
           background: #0a0a0f;
           color: #e8e8f0;
-          font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+          font-family: 'SF Mono', 'Fira Code', monospace;
           height: 100vh;
           overflow: hidden;
         }
@@ -116,83 +168,60 @@ export default function Home() {
           display: flex;
           flex-direction: column;
           height: 100vh;
-          max-width: 800px;
-          margin: 0 auto;
         }
 
         .header {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 16px 24px;
+          padding: 14px 24px;
           border-bottom: 1px solid #1e1e2e;
           background: #0a0a0f;
+          flex-shrink: 0;
         }
 
-        .logo {
+        .logo { display: flex; align-items: center; gap: 10px; }
+        .logo-icon { font-size: 18px; }
+        .logo-text { font-size: 17px; font-weight: 700; letter-spacing: 0.05em; color: #a78bfa; }
+
+        .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7280; }
+        .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+
+        .main-content {
           display: flex;
-          align-items: center;
-          gap: 10px;
+          flex: 1;
+          overflow: hidden;
         }
 
-        .logo-icon {
-          font-size: 20px;
-        }
-
-        .logo-text {
-          font-size: 18px;
-          font-weight: 700;
-          letter-spacing: 0.05em;
-          color: #a78bfa;
-        }
-
-        .status {
+        /* Chat Panel */
+        .chat-panel {
           display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 12px;
-          color: #6b7280;
-        }
-
-        .status-dot {
-          width: 7px;
-          height: 7px;
-          border-radius: 50%;
-          background: #22c55e;
-          box-shadow: 0 0 6px #22c55e;
+          flex-direction: column;
+          width: 420px;
+          flex-shrink: 0;
+          border-right: 1px solid #1e1e2e;
         }
 
         .chat-container {
           flex: 1;
           overflow-y: auto;
-          padding: 24px 16px;
+          padding: 20px 14px;
           display: flex;
           flex-direction: column;
-          gap: 16px;
+          gap: 14px;
           scrollbar-width: thin;
           scrollbar-color: #1e1e2e transparent;
         }
 
-        .chat-container::-webkit-scrollbar { width: 4px; }
-        .chat-container::-webkit-scrollbar-thumb { background: #1e1e2e; border-radius: 4px; }
-
-        .message {
-          display: flex;
-        }
-
-        .message.user {
-          justify-content: flex-end;
-        }
-
-        .message.assistant {
-          justify-content: flex-start;
-        }
+        .message { display: flex; }
+        .message.user { justify-content: flex-end; }
+        .message.assistant { justify-content: flex-start; }
 
         .bubble {
-          max-width: 75%;
-          padding: 12px 16px;
+          max-width: 85%;
+          padding: 10px 14px;
           border-radius: 12px;
-          font-size: 14px;
+          font-size: 13px;
           line-height: 1.6;
         }
 
@@ -210,39 +239,18 @@ export default function Home() {
           border-radius: 12px 12px 12px 2px;
         }
 
-        .bubble pre {
-          font-family: inherit;
-          white-space: pre-wrap;
-          word-break: break-word;
-        }
+        .bubble pre { font-family: inherit; white-space: pre-wrap; word-break: break-word; }
 
-        .typing {
-          display: flex;
-          gap: 5px;
-          align-items: center;
-          padding: 16px;
-        }
-
-        .typing span {
-          width: 6px;
-          height: 6px;
-          background: #6d28d9;
-          border-radius: 50%;
-          animation: bounce 1.2s infinite;
-        }
-
+        .typing { display: flex; gap: 5px; align-items: center; padding: 14px; }
+        .typing span { width: 6px; height: 6px; background: #6d28d9; border-radius: 50%; animation: bounce 1.2s infinite; }
         .typing span:nth-child(2) { animation-delay: 0.2s; }
         .typing span:nth-child(3) { animation-delay: 0.4s; }
-
-        @keyframes bounce {
-          0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
-          40% { transform: scale(1.2); opacity: 1; }
-        }
+        @keyframes bounce { 0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; } 40% { transform: scale(1.2); opacity: 1; } }
 
         .input-area {
           display: flex;
-          gap: 10px;
-          padding: 16px;
+          gap: 8px;
+          padding: 12px;
           border-top: 1px solid #1e1e2e;
           background: #0a0a0f;
           align-items: flex-end;
@@ -253,52 +261,116 @@ export default function Home() {
           background: #111120;
           border: 1px solid #1e1e3e;
           border-radius: 10px;
-          padding: 12px 16px;
+          padding: 10px 14px;
           color: #e8e8f0;
           font-family: inherit;
-          font-size: 14px;
+          font-size: 13px;
           resize: none;
           outline: none;
           transition: border-color 0.2s;
-          max-height: 120px;
-          overflow-y: auto;
+          max-height: 100px;
         }
 
-        .input-area textarea:focus {
-          border-color: #6d28d9;
-        }
-
-        .input-area textarea::placeholder {
-          color: #3d3d5c;
-        }
+        .input-area textarea:focus { border-color: #6d28d9; }
+        .input-area textarea::placeholder { color: #3d3d5c; }
 
         .input-area button {
-          width: 44px;
-          height: 44px;
+          width: 40px;
+          height: 40px;
           background: #6d28d9;
           border: none;
           border-radius: 10px;
           color: white;
-          font-size: 20px;
+          font-size: 18px;
           cursor: pointer;
-          transition: background 0.2s, transform 0.1s;
+          transition: background 0.2s;
           display: flex;
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
         }
 
-        .input-area button:hover:not(:disabled) {
-          background: #7c3aed;
-          transform: scale(1.05);
+        .input-area button:hover:not(:disabled) { background: #7c3aed; }
+        .input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Browser Panel */
+        .browser-panel {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
         }
 
-        .input-area button:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
+        .browser-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 16px;
+          border-bottom: 1px solid #1e1e2e;
+          background: #0d0d1a;
+        }
+
+        .browser-title { font-size: 13px; color: #6b7280; }
+        .screenshot-count { font-size: 11px; color: #4c1d95; background: #1e1e3e; padding: 2px 8px; border-radius: 10px; }
+
+        .browser-screen {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          background: #080810;
+          position: relative;
+        }
+
+        .screenshot-img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+        }
+
+        .browser-empty {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 12px;
+          color: #2d2d4d;
+          text-align: center;
+        }
+
+        .browser-empty span { font-size: 48px; opacity: 0.3; }
+        .browser-empty p { font-size: 13px; line-height: 1.6; }
+
+        .screenshot-strip {
+          display: flex;
+          gap: 6px;
+          padding: 8px 12px;
+          border-top: 1px solid #1e1e2e;
+          background: #0d0d1a;
+          overflow-x: auto;
+          flex-shrink: 0;
+        }
+
+        .strip-thumb {
+          width: 80px;
+          height: 50px;
+          object-fit: cover;
+          border-radius: 4px;
+          border: 2px solid transparent;
+          cursor: pointer;
+          opacity: 0.6;
+          transition: all 0.2s;
+          flex-shrink: 0;
+        }
+
+        .strip-thumb:hover { opacity: 1; }
+        .strip-thumb.active { border-color: #6d28d9; opacity: 1; }
+
+        @media (max-width: 768px) {
+          .main-content { flex-direction: column; }
+          .chat-panel { width: 100%; height: 50vh; border-right: none; border-bottom: 1px solid #1e1e2e; }
         }
       `}</style>
     </main>
   );
 }
-// rebuilt Sat Jun 13 16:52:59 UTC 2026
