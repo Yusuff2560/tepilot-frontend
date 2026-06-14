@@ -14,13 +14,13 @@ function useWake() {
 
     function startProgress() {
       interval = setInterval(() => {
-        setProgress(p => p >= 92 ? p : p + (p < 40 ? 4 : p < 70 ? 1.5 : 0.4));
+        setProgress(p => p >= 88 ? p : p + (p < 40 ? 3 : p < 70 ? 1 : 0.3));
       }, 350);
     }
 
     async function check() {
       try {
-        const r = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(3000) });
+        const r = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(25000) });
         if (r.ok && !cancelled) {
           clearInterval(interval);
           setProgress(100);
@@ -37,7 +37,7 @@ function useWake() {
       setState("waking");
       startProgress();
       while (!cancelled) {
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 5000));
         const ok = await check();
         if (ok) break;
       }
