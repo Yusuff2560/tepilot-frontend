@@ -1,31 +1,78 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
+
+function useWake() {
+  const [wakeState, setWakeState] = useState("checking"); // checking | waking | ready
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let interval;
+    let cancelled = false;
+
+    async function ping() {
+      // Start fake progress
+      interval = setInterval(() => {
+        setProgress(p => {
+          if (p >= 92) return p;
+          return p + (p < 40 ? 4 : p < 70 ? 2 : 0.5);
+        });
+      }, 400);
+
+      try {
+        const res = await fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(30000) });
+        if (!cancelled && res.ok) {
+          setProgress(100);
+          setTimeout(() => { if (!cancelled) setWakeState("ready"); }, 600);
+        }
+      } catch {
+        // retry
+        if (!cancelled) {
+          setWakeState("waking");
+          setTimeout(ping, 3000);
+        }
+      }
+    }
+
+    // Quick check first
+    fetch(`${BACKEND_URL}/health`, { signal: AbortSignal.timeout(3000) })
+      .then(r => { if (r.ok && !cancelled) { setProgress(100); setTimeout(() => { if (!cancelled) setWakeState("ready"); }, 300); } })
+      .catch(() => { if (!cancelled) { setWakeState("waking"); ping(); } });
+
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  return { wakeState, progress };
+}
+
 export default function Home() {
+  const { wakeState, progress } = useWake();
   const [messages, setMessages] = useState([
-    {
-      role: "assistant",
-      content: "Merhaba! Ben TePilot. Bir web sitesini gezeyim, araştırma yapayım veya yardımcı olayım.",
-    },
+    { role: "assistant", content: "TePilot hazır. Bir URL ver ya da görev tanımla." },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [screenshots, setScreenshots] = useState([]);
-  const [activeScreenshot, setActiveScreenshot] = useState(null);
+  const [activeShot, setActiveShot] = useState(null);
+  const [cursor, setCursor] = useState(true);
   const bottomRef = useRef(null);
+  const inputRef = useRef(null);
 
-  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
+  useEffect(() => {
+    const t = setInterval(() => setCursor(c => !c), 530);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, loading]);
 
   async function sendMessage() {
-    if (!input.trim() || loading) return;
-
+    if (!input.trim() || loading || wakeState !== "ready") return;
     const userMsg = { role: "user", content: input };
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
+    const next = [...messages, userMsg];
+    setMessages(next);
     setInput("");
     setLoading(true);
 
@@ -33,344 +80,404 @@ export default function Home() {
       const res = await fetch(`${BACKEND_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages }),
+        body: JSON.stringify({ messages: next }),
       });
-
       const data = await res.json();
-
-      if (data.screenshots && data.screenshots.length > 0) {
+      if (data.screenshots?.length) {
         setScreenshots(data.screenshots);
-        setActiveScreenshot(data.screenshots[data.screenshots.length - 1]);
+        setActiveShot(data.screenshots[data.screenshots.length - 1]);
       }
-
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.response || data.error },
-      ]);
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "❌ Backend'e bağlanılamadı." },
-      ]);
+      setMessages(m => [...m, { role: "assistant", content: data.response || data.error }]);
+    } catch {
+      setMessages(m => [...m, { role: "assistant", content: "Bağlantı hatası." }]);
     } finally {
       setLoading(false);
+      inputRef.current?.focus();
     }
   }
 
   function handleKey(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
 
-  return (
-    <main className="app">
-      <header className="header">
-        <div className="logo">
-          <span className="logo-icon">⚡</span>
-          <span className="logo-text">TePilot</span>
-        </div>
-        <span className="status">
-          <span className="status-dot" />
-          Online
-        </span>
-      </header>
+  const statusLine = wakeState === "ready"
+    ? `TEPILOT > ready${cursor ? "_" : " "}`
+    : wakeState === "waking"
+    ? `TEPILOT > waking up... ${Math.round(progress)}%`
+    : `TEPILOT > connecting${cursor ? "." : " "}`;
 
-      <div className="main-content">
-        {/* Chat Panel */}
-        <div className="chat-panel">
-          <div className="chat-container">
-            {messages.map((msg, i) => (
-              <div key={i} className={`message ${msg.role}`}>
-                <div className="bubble">
-                  <pre>{msg.content}</pre>
-                </div>
+  return (
+    <div className="root">
+      {/* Status bar */}
+      <div className="statusbar">
+        <span className="statusbar-text">{statusLine}</span>
+        {wakeState !== "ready" && (
+          <div className="wake-bar">
+            <div className="wake-fill" style={{ width: `${progress}%` }} />
+          </div>
+        )}
+        <span className="statusbar-right">
+          <span className={`dot ${wakeState === "ready" ? "green" : "yellow"}`} />
+          {wakeState === "ready" ? "live" : "starting"}
+        </span>
+      </div>
+
+      <div className="body">
+        {/* Chat */}
+        <aside className="sidebar">
+          <div className="messages">
+            {messages.map((m, i) => (
+              <div key={i} className={`msg ${m.role}`}>
+                <span className="msg-prefix">{m.role === "user" ? "> " : "~ "}</span>
+                <pre className="msg-text">{m.content}</pre>
               </div>
             ))}
             {loading && (
-              <div className="message assistant">
-                <div className="bubble typing">
+              <div className="msg assistant">
+                <span className="msg-prefix">~ </span>
+                <span className="thinking">
                   <span /><span /><span />
-                </div>
+                </span>
               </div>
             )}
             <div ref={bottomRef} />
           </div>
 
-          <div className="input-area">
+          <div className="input-row">
+            <span className="input-prompt">&gt;</span>
             <textarea
+              ref={inputRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={e => setInput(e.target.value)}
               onKeyDown={handleKey}
-              placeholder="Komut ver... (Enter ile gönder)"
+              placeholder={wakeState !== "ready" ? "uyanıyor..." : "komut ver"}
+              disabled={loading || wakeState !== "ready"}
               rows={1}
-              disabled={loading}
+              className="input"
             />
-            <button onClick={sendMessage} disabled={loading || !input.trim()}>
-              {loading ? "..." : "↑"}
-            </button>
+            <button
+              className="send-btn"
+              onClick={sendMessage}
+              disabled={loading || !input.trim() || wakeState !== "ready"}
+            >▲</button>
           </div>
-        </div>
+        </aside>
 
-        {/* Browser Panel */}
-        <div className="browser-panel">
-          <div className="browser-header">
-            <span className="browser-title">🌐 Tarayıcı</span>
-            {screenshots.length > 0 && (
-              <span className="screenshot-count">{screenshots.length} ekran</span>
+        {/* Divider */}
+        <div className="divider" />
+
+        {/* Browser canvas */}
+        <main className="canvas">
+          <div className="canvas-header">
+            <span className="canvas-label">browser canvas</span>
+            {activeShot && screenshots.length > 1 && (
+              <span className="shot-count">{screenshots.length} frames</span>
             )}
           </div>
 
-          <div className="browser-screen">
-            {activeScreenshot ? (
+          <div className="canvas-view">
+            {activeShot ? (
               <img
-                src={`data:image/jpeg;base64,${activeScreenshot}`}
-                alt="Browser screenshot"
-                className="screenshot-img"
+                src={`data:image/jpeg;base64,${activeShot}`}
+                alt="browser"
+                className="shot-img"
               />
             ) : (
-              <div className="browser-empty">
-                <span>🤖</span>
-                <p>TePilot bir web sitesine gittiğinde<br />ekran burada görünecek</p>
+              <div className="canvas-empty">
+                <div className="empty-grid" />
+                <p className="empty-text">tarayıcı bekleniyor</p>
               </div>
             )}
           </div>
 
           {screenshots.length > 1 && (
-            <div className="screenshot-strip">
+            <div className="filmstrip">
               {screenshots.map((s, i) => (
-                <img
+                <button
                   key={i}
-                  src={`data:image/jpeg;base64,${s}`}
-                  alt={`Screenshot ${i + 1}`}
-                  className={`strip-thumb ${s === activeScreenshot ? "active" : ""}`}
-                  onClick={() => setActiveScreenshot(s)}
-                />
+                  className={`film-thumb ${s === activeShot ? "active" : ""}`}
+                  onClick={() => setActiveShot(s)}
+                >
+                  <img src={`data:image/jpeg;base64,${s}`} alt={`frame ${i+1}`} />
+                  <span className="frame-num">{i + 1}</span>
+                </button>
               ))}
             </div>
           )}
-        </div>
+        </main>
       </div>
 
       <style jsx global>{`
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-          background: #0a0a0f;
-          color: #e8e8f0;
-          font-family: 'SF Mono', 'Fira Code', monospace;
+          background: #080812;
+          color: #c8c8e0;
+          font-family: 'Berkeley Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', ui-monospace, monospace;
           height: 100vh;
           overflow: hidden;
         }
 
-        .app {
-          display: flex;
-          flex-direction: column;
-          height: 100vh;
-        }
+        .root { display: flex; flex-direction: column; height: 100vh; }
 
-        .header {
+        /* STATUS BAR */
+        .statusbar {
+          height: 32px;
+          background: #0a0a18;
+          border-bottom: 1px solid #1c1c38;
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          padding: 14px 24px;
-          border-bottom: 1px solid #1e1e2e;
-          background: #0a0a0f;
+          gap: 12px;
+          padding: 0 16px;
           flex-shrink: 0;
         }
-
-        .logo { display: flex; align-items: center; gap: 10px; }
-        .logo-icon { font-size: 18px; }
-        .logo-text { font-size: 17px; font-weight: 700; letter-spacing: 0.05em; color: #a78bfa; }
-
-        .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7280; }
-        .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e; }
-
-        .main-content {
-          display: flex;
+        .statusbar-text {
+          font-size: 11px;
+          color: #7c5cfc;
+          letter-spacing: 0.06em;
+          font-weight: 600;
+          min-width: 260px;
+        }
+        .wake-bar {
           flex: 1;
+          max-width: 200px;
+          height: 2px;
+          background: #1c1c38;
+          border-radius: 1px;
           overflow: hidden;
         }
+        .wake-fill {
+          height: 100%;
+          background: linear-gradient(90deg, #7c5cfc, #00e5a0);
+          transition: width 0.4s ease;
+        }
+        .statusbar-right {
+          margin-left: auto;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          color: #4a4a6a;
+          letter-spacing: 0.04em;
+        }
+        .dot {
+          width: 6px; height: 6px; border-radius: 50%;
+        }
+        .dot.green { background: #00e5a0; box-shadow: 0 0 6px #00e5a080; }
+        .dot.yellow { background: #f5a623; box-shadow: 0 0 6px #f5a62380; animation: pulse 1.5s ease infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
-        /* Chat Panel */
-        .chat-panel {
+        /* BODY */
+        .body { display: flex; flex: 1; overflow: hidden; }
+
+        /* SIDEBAR */
+        .sidebar {
+          width: 360px;
+          flex-shrink: 0;
           display: flex;
           flex-direction: column;
-          width: 420px;
-          flex-shrink: 0;
-          border-right: 1px solid #1e1e2e;
+          background: #080812;
         }
 
-        .chat-container {
+        .messages {
           flex: 1;
           overflow-y: auto;
-          padding: 20px 14px;
+          padding: 20px 16px 12px;
           display: flex;
           flex-direction: column;
-          gap: 14px;
+          gap: 18px;
           scrollbar-width: thin;
-          scrollbar-color: #1e1e2e transparent;
+          scrollbar-color: #1c1c38 transparent;
         }
 
-        .message { display: flex; }
-        .message.user { justify-content: flex-end; }
-        .message.assistant { justify-content: flex-start; }
-
-        .bubble {
-          max-width: 85%;
-          padding: 10px 14px;
-          border-radius: 12px;
-          font-size: 13px;
+        .msg { display: flex; gap: 6px; align-items: flex-start; }
+        .msg-prefix {
+          font-size: 12px;
+          font-weight: 700;
+          flex-shrink: 0;
+          margin-top: 1px;
           line-height: 1.6;
         }
+        .msg.user .msg-prefix { color: #7c5cfc; }
+        .msg.assistant .msg-prefix { color: #00e5a0; }
 
-        .message.user .bubble {
-          background: #4c1d95;
-          border: 1px solid #6d28d9;
-          color: #ede9fe;
-          border-radius: 12px 12px 2px 12px;
-        }
-
-        .message.assistant .bubble {
-          background: #111120;
-          border: 1px solid #1e1e3e;
-          color: #c4c4d4;
-          border-radius: 12px 12px 12px 2px;
-        }
-
-        .bubble pre { font-family: inherit; white-space: pre-wrap; word-break: break-word; }
-
-        .typing { display: flex; gap: 5px; align-items: center; padding: 14px; }
-        .typing span { width: 6px; height: 6px; background: #6d28d9; border-radius: 50%; animation: bounce 1.2s infinite; }
-        .typing span:nth-child(2) { animation-delay: 0.2s; }
-        .typing span:nth-child(3) { animation-delay: 0.4s; }
-        @keyframes bounce { 0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; } 40% { transform: scale(1.2); opacity: 1; } }
-
-        .input-area {
-          display: flex;
-          gap: 8px;
-          padding: 12px;
-          border-top: 1px solid #1e1e2e;
-          background: #0a0a0f;
-          align-items: flex-end;
-        }
-
-        .input-area textarea {
-          flex: 1;
-          background: #111120;
-          border: 1px solid #1e1e3e;
-          border-radius: 10px;
-          padding: 10px 14px;
-          color: #e8e8f0;
+        .msg-text {
           font-family: inherit;
+          font-size: 12.5px;
+          line-height: 1.65;
+          white-space: pre-wrap;
+          word-break: break-word;
+          color: #b8b8d0;
+        }
+        .msg.user .msg-text { color: #e0e0f0; }
+
+        .thinking { display: flex; gap: 4px; align-items: center; padding-top: 4px; }
+        .thinking span {
+          width: 5px; height: 5px;
+          border-radius: 50%;
+          background: #00e5a0;
+          opacity: 0.4;
+          animation: blink 1.2s ease infinite;
+        }
+        .thinking span:nth-child(2) { animation-delay: 0.2s; }
+        .thinking span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink { 0%,80%,100%{opacity:0.2} 40%{opacity:1} }
+
+        /* INPUT */
+        .input-row {
+          display: flex;
+          align-items: flex-end;
+          gap: 8px;
+          padding: 10px 14px 14px;
+          border-top: 1px solid #12122a;
+        }
+        .input-prompt {
+          color: #7c5cfc;
           font-size: 13px;
+          font-weight: 700;
+          padding-bottom: 9px;
+          flex-shrink: 0;
+        }
+        .input {
+          flex: 1;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid #2a2a4a;
+          color: #e0e0f0;
+          font-family: inherit;
+          font-size: 12.5px;
+          padding: 6px 0 8px;
           resize: none;
           outline: none;
-          transition: border-color 0.2s;
-          max-height: 100px;
+          line-height: 1.5;
+          max-height: 80px;
+          overflow-y: auto;
+          transition: border-color 0.15s;
         }
+        .input:focus { border-bottom-color: #7c5cfc; }
+        .input::placeholder { color: #2e2e4e; }
+        .input:disabled { opacity: 0.4; }
 
-        .input-area textarea:focus { border-color: #6d28d9; }
-        .input-area textarea::placeholder { color: #3d3d5c; }
-
-        .input-area button {
-          width: 40px;
-          height: 40px;
-          background: #6d28d9;
+        .send-btn {
+          width: 28px; height: 28px;
+          background: #7c5cfc;
           border: none;
-          border-radius: 10px;
+          border-radius: 6px;
           color: white;
-          font-size: 18px;
+          font-size: 11px;
           cursor: pointer;
-          transition: background 0.2s;
-          display: flex;
-          align-items: center;
-          justify-content: center;
+          flex-shrink: 0;
+          transition: background 0.15s, transform 0.1s;
+          display: flex; align-items: center; justify-content: center;
+          margin-bottom: 2px;
+        }
+        .send-btn:hover:not(:disabled) { background: #9070ff; transform: translateY(-1px); }
+        .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* DIVIDER */
+        .divider {
+          width: 1px;
+          background: linear-gradient(to bottom, transparent, #7c5cfc40, #00e5a030, transparent);
           flex-shrink: 0;
         }
 
-        .input-area button:hover:not(:disabled) { background: #7c3aed; }
-        .input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
-
-        /* Browser Panel */
-        .browser-panel {
+        /* CANVAS */
+        .canvas {
           flex: 1;
           display: flex;
           flex-direction: column;
           overflow: hidden;
+          background: #060610;
         }
-
-        .browser-header {
+        .canvas-header {
+          height: 32px;
+          border-bottom: 1px solid #12122a;
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          padding: 10px 16px;
-          border-bottom: 1px solid #1e1e2e;
-          background: #0d0d1a;
+          padding: 0 16px;
+          gap: 10px;
+          flex-shrink: 0;
         }
+        .canvas-label { font-size: 10px; color: #2e2e5e; letter-spacing: 0.1em; text-transform: uppercase; }
+        .shot-count { font-size: 10px; color: #7c5cfc; margin-left: auto; }
 
-        .browser-title { font-size: 13px; color: #6b7280; }
-        .screenshot-count { font-size: 11px; color: #4c1d95; background: #1e1e3e; padding: 2px 8px; border-radius: 10px; }
-
-        .browser-screen {
+        .canvas-view {
           flex: 1;
           display: flex;
           align-items: center;
           justify-content: center;
           overflow: hidden;
-          background: #080810;
           position: relative;
         }
 
-        .screenshot-img {
-          width: 100%;
-          height: 100%;
+        .shot-img {
+          width: 100%; height: 100%;
           object-fit: contain;
+          display: block;
         }
 
-        .browser-empty {
+        .canvas-empty {
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 12px;
-          color: #2d2d4d;
-          text-align: center;
+          gap: 16px;
+          position: relative;
+        }
+        .empty-grid {
+          width: 280px; height: 180px;
+          background-image:
+            linear-gradient(#1a1a2e 1px, transparent 1px),
+            linear-gradient(90deg, #1a1a2e 1px, transparent 1px);
+          background-size: 28px 28px;
+          border: 1px solid #1a1a2e;
+          border-radius: 4px;
+          opacity: 0.5;
+        }
+        .empty-text {
+          font-size: 11px;
+          color: #2e2e4e;
+          letter-spacing: 0.08em;
+          position: absolute;
+          bottom: -28px;
         }
 
-        .browser-empty span { font-size: 48px; opacity: 0.3; }
-        .browser-empty p { font-size: 13px; line-height: 1.6; }
-
-        .screenshot-strip {
+        /* FILMSTRIP */
+        .filmstrip {
+          height: 64px;
           display: flex;
+          align-items: center;
           gap: 6px;
           padding: 8px 12px;
-          border-top: 1px solid #1e1e2e;
-          background: #0d0d1a;
+          border-top: 1px solid #12122a;
           overflow-x: auto;
           flex-shrink: 0;
+          scrollbar-width: thin;
+          scrollbar-color: #1c1c38 transparent;
         }
-
-        .strip-thumb {
-          width: 80px;
-          height: 50px;
-          object-fit: cover;
-          border-radius: 4px;
-          border: 2px solid transparent;
-          cursor: pointer;
-          opacity: 0.6;
-          transition: all 0.2s;
+        .film-thumb {
+          position: relative;
+          width: 84px; height: 48px;
           flex-shrink: 0;
+          border: 1px solid #1c1c38;
+          border-radius: 3px;
+          overflow: hidden;
+          background: none;
+          cursor: pointer;
+          padding: 0;
+          opacity: 0.55;
+          transition: opacity 0.15s, border-color 0.15s;
         }
-
-        .strip-thumb:hover { opacity: 1; }
-        .strip-thumb.active { border-color: #6d28d9; opacity: 1; }
-
-        @media (max-width: 768px) {
-          .main-content { flex-direction: column; }
-          .chat-panel { width: 100%; height: 50vh; border-right: none; border-bottom: 1px solid #1e1e2e; }
+        .film-thumb:hover { opacity: 0.85; }
+        .film-thumb.active { border-color: #7c5cfc; opacity: 1; }
+        .film-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .frame-num {
+          position: absolute;
+          bottom: 2px; right: 4px;
+          font-size: 9px;
+          color: #7c5cfc;
+          line-height: 1;
         }
       `}</style>
-    </main>
+    </div>
   );
 }
