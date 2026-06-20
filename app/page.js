@@ -87,9 +87,12 @@ export default function TePilot() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState(true);
+  const [streamingText, setStreamingText] = useState("");
+  const [statusMsg, setStatusMsg] = useState("");
 
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     const t = setInterval(() => setCursor(c => !c), 530);
@@ -98,26 +101,96 @@ export default function TePilot() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, loading, streamingText]);
 
   const sendMessage = useCallback(async () => {
     if (!input.trim() || loading || !isReady) return;
+
     const userMsg = { role: "user", content: input };
     const next = [...messages, userMsg];
     setMessages(next);
     setInput("");
     setLoading(true);
+    setStreamingText("");
+    setStatusMsg("Düşünüyor...");
 
     try {
-      const res = await fetch(`${BACKEND_URL}/chat`, {
+      const res = await fetch(`${BACKEND_URL}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: next }),
       });
-      const data = await res.json();
-      setMessages(m => [...m, { role: "assistant", content: data.response || data.error }]);
-    } catch {
+
+      if (!res.ok) throw new Error("Sunucu hatası");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulated = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // keep incomplete line
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            // handled below with data
+          } else if (line.startsWith("data: ")) {
+            // find the event type from previous line — we'll parse inline
+          }
+        }
+
+        // Re-parse buffer properly with event+data pairs
+        const fullChunk = lines.join("\n");
+        const eventBlocks = fullChunk.split("\n\n");
+
+        for (const block of eventBlocks) {
+          if (!block.trim()) continue;
+          const eventLine = block.match(/^event: (.+)$/m)?.[1];
+          const dataLine = block.match(/^data: (.+)$/m)?.[1];
+          if (!dataLine) continue;
+
+          try {
+            const parsed = JSON.parse(dataLine);
+
+            if (eventLine === "token") {
+              accumulated += parsed.token;
+              setStreamingText(accumulated);
+            } else if (eventLine === "action") {
+              setStatusMsg(`⚡ ${parsed.action}${parsed.params?.url ? `: ${parsed.params.url}` : ""}`);
+            } else if (eventLine === "action_result") {
+              setStatusMsg("✓ Tamamlandı");
+            } else if (eventLine === "status") {
+              setStatusMsg(parsed.message);
+            } else if (eventLine === "done") {
+              const finalText = parsed.response || accumulated;
+              setMessages(m => [...m, { role: "assistant", content: finalText }]);
+              setStreamingText("");
+              setStatusMsg("");
+            } else if (eventLine === "error") {
+              setMessages(m => [...m, { role: "assistant", content: `Hata: ${parsed.error}` }]);
+              setStreamingText("");
+              setStatusMsg("");
+            }
+          } catch {}
+        }
+      }
+
+      // fallback: if stream ended but no done event
+      if (accumulated && streamingText) {
+        setMessages(m => [...m, { role: "assistant", content: accumulated }]);
+        setStreamingText("");
+        setStatusMsg("");
+      }
+
+    } catch (err) {
       setMessages(m => [...m, { role: "assistant", content: "Bağlantı hatası." }]);
+      setStreamingText("");
+      setStatusMsg("");
     } finally {
       setLoading(false);
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -156,12 +229,25 @@ export default function TePilot() {
                 <pre className="txt">{m.content}</pre>
               </div>
             ))}
+
+            {/* Live streaming bubble */}
             {loading && (
               <div className="msg assistant">
                 <span className="pfx">~</span>
-                <span className="dots"><span/><span/><span/></span>
+                {streamingText ? (
+                  <div>
+                    <pre className="txt streaming">{streamingText}<span className="stream-cursor">▋</span></pre>
+                    {statusMsg && <span className="status-tag">{statusMsg}</span>}
+                  </div>
+                ) : (
+                  <div>
+                    <span className="dots"><span/><span/><span/></span>
+                    {statusMsg && <span className="status-tag">{statusMsg}</span>}
+                  </div>
+                )}
               </div>
             )}
+
             <div ref={bottomRef} />
           </div>
 
@@ -225,6 +311,10 @@ export default function TePilot() {
         .msg.assistant .pfx { color: #00e5a0; }
         .txt { font-family: inherit; font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; color: #a8a8c8; }
         .msg.user .txt { color: #dcdcf4; }
+        .streaming { color: #c0c0d8; }
+        .stream-cursor { display: inline-block; color: #00e5a0; animation: blink-cur 0.7s step-end infinite; }
+        @keyframes blink-cur { 0%,100%{opacity:1} 50%{opacity:0} }
+        .status-tag { display: block; margin-top: 4px; font-size: 10px; color: #7c5cfc; letter-spacing: 0.05em; opacity: 0.8; }
         .dots { display: flex; gap: 4px; align-items: center; padding-top: 6px; }
         .dots span { width: 5px; height: 5px; border-radius: 50%; background: #00e5a0; opacity: 0.3; animation: dot-pulse 1.2s ease infinite; }
         .dots span:nth-child(2) { animation-delay: 0.2s; }
